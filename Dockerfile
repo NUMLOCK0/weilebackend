@@ -7,8 +7,7 @@ WORKDIR /app
 # 复制依赖清单并安装
 # 使用清华源加速下载
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
-
+RUN pip install --no-cache-dir -r requirements.txt -i
 # 复制项目代码
 COPY . .
 
