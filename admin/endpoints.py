@@ -23,10 +23,11 @@ from security import verify_password, create_access_token
 
 
 router = APIRouter()
+auth_router = APIRouter()
 
 # --- 登录相关接口 ---
 
-@router.get("/captcha", response_model=CaptchaResponse)
+@auth_router.get("/captcha", response_model=CaptchaResponse)
 async def get_captcha(db: Session = Depends(get_db)):
     """获取图形验证码并存入数据库"""
     captcha_id = str(uuid.uuid4())
@@ -43,7 +44,7 @@ async def get_captcha(db: Session = Depends(get_db)):
         "captcha_image": base64_image
     }
 
-@router.post("/login", response_model=TokenResponse)
+@auth_router.post("/login", response_model=TokenResponse)
 async def login(login_in: LoginRequest, db: Session = Depends(get_db)):
     """管理员登录 (包含验证码校验和密码哈希校验)"""
     # 1. 验证码校验 (从数据库查询)

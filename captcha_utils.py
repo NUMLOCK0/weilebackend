@@ -4,7 +4,7 @@ import base64
 from io import BytesIO
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-def generate_captcha(length=4, width=120, height=40):
+def generate_captcha(length=4, width=160, height=60):
     """
     生成图形验证码，返回 (验证码文本, Base64 图片字符串)
     """
@@ -30,19 +30,23 @@ def generate_captcha(length=4, width=120, height=40):
     # 绘制文字
     # 尝试加载内置或系统字体，如果失败则使用默认字体
     try:
-        # Windows 常用字体路径示例，或者你可以指定具体的 ttf 文件
-        font = ImageFont.truetype("arial.ttf", 28)
+        # Mac 常用字体路径示例，或者你可以指定具体的 ttf 文件
+        font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 40)
     except:
-        font = ImageFont.load_default()
+        try:
+            # 兼容其他系统
+            font = ImageFont.truetype("arial.ttf", 40)
+        except:
+            font = ImageFont.load_default()
 
     for i, char in enumerate(code):
         # 随机旋转文字ImageFilter3
-        char_img = Image.new('RGBA', (30, 30), (255, 255, 255, 0))
+        char_img = Image.new('RGBA', (40, 40), (255, 255, 255, 0))
         char_draw = ImageDraw.Draw(char_img)
         char_draw.text((0, 0), char, font=font, fill=(random.randint(0, 150), 0, 0))
         rotated_char = char_img.rotate(random.randint(-30, 30), expand=1)
         # 粘贴到主图
-        img.paste(rotated_char, (10 + i * 25, 5), rotated_char)
+        img.paste(rotated_char, (15 + i * 35, 10), rotated_char)
 
     # 模糊处理
     img = img.filter(ImageFilter.SMOOTH)

@@ -1,8 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Header
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List, Optional
 from datetime import date as date_type
+import urllib.request
+import json
+import os
 
 from database import get_db
 from models import Service, Technician, Booking, TechnicianSchedule, MarketingSource, Carousel, ShopInfo
@@ -16,9 +19,53 @@ from schemas import (
     CarouselResponse,
     ShopInfoResponse,
 )
+from pydantic import BaseModel
+from security import get_current_client_user, create_access_token
 
 router = APIRouter()
 
+class ClientLoginRequest(BaseModel):
+    code: Optional[str] = None
+    userInfo: Optional[dict] = None
+
+@router.post("/login", summary="客户端登录 (微信登录)")
+async def client_login(
+    req: ClientLoginRequest,
+    x_wx_openid: Optional[str] = Header(None, alias="X-WX-OPENID")
+):
+    openid = x_wx_openid
+    
+    if not openid:
+        if not req.code:
+            raise HTTPException(status_code=400, detail="缺少登录凭证 code")
+            
+        app_id = os.getenv("WECHAT_APP_ID")
+        app_secret = os.getenv("WECHAT_APP_SECRET")
+        
+        if app_id and app_secret:
+            url = f"https://api.weixin.qq.com/sns/jscode2session?appid={app_id}&secret={app_secret}&js_code={req.code}&grant_type=authorization_code"
+            try:
+                with urllib.request.urlopen(url) as response:
+                    data = json.loads(response.read().decode())
+                    if "openid" in data:
+                        openid = data["openid"]
+                    else:
+                        raise HTTPException(status_code=400, detail=f"微信登录失败: {data.get('errmsg')}")
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"请求微信接口失败: {str(e)}")
+        else:
+            # 本地开发环境，如果没有配置 appid 和 secret，使用 mock 的 openid
+            openid = f"mock_openid_{req.code}"
+            
+    if not openid:
+        raise HTTPException(status_code=400, detail="无法获取 openid")
+
+    access_token = create_access_token(data={"sub": openid})
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "openid": openid
+    }
 
 @router.get("/services", response_model=List[ServiceResponse])
 async def get_services(db: Session = Depends(get_db)):
@@ -89,7 +136,11 @@ async def get_availability(
 
 
 @router.post("/bookings", response_model=BookingResponse)
-async def create_booking(payload: BookingCreateRequest, db: Session = Depends(get_db)):
+async def create_booking(
+    payload: BookingCreateRequest, 
+    db: Session = Depends(get_db),
+    current_openid: str = Depends(get_current_client_user)
+):
     service = db.query(Service).filter(Service.id == payload.service_id, Service.is_active == True).first()
     if not service:
         raise HTTPException(status_code=404, detail="服务项目不存在")
@@ -140,7 +191,7 @@ async def create_booking(payload: BookingCreateRequest, db: Session = Depends(ge
         if overlap:
             raise HTTPException(status_code=409, detail=f"时段已被预约: {', '.join(overlap)}")
 
-    user_openid = payload.user_openid or payload.customer_phone
+    user_openid = current_openid
 
     booking = Booking(
         user_openid=user_openid,
@@ -149,7 +200,7 @@ async def create_booking(payload: BookingCreateRequest, db: Session = Depends(ge
         marketing_source_id=payload.marketing_source_id,
         booking_date=payload.booking_date,
         booking_times=requested_times,
-        total_price=service.price,
+        total_price=service.price * max(len(requested_times), 1),
         customer_name=payload.customer_name,
         customer_phone=payload.customer_phone,
         note=payload.note,
@@ -162,10 +213,13 @@ async def create_booking(payload: BookingCreateRequest, db: Session = Depends(ge
 
 
 @router.get("/bookings", response_model=List[BookingResponse])
-async def list_user_bookings(user_openid: str = Query(..., min_length=1), db: Session = Depends(get_db)):
+async def list_user_bookings(
+    db: Session = Depends(get_db),
+    current_openid: str = Depends(get_current_client_user)
+):
     bookings = (
         db.query(Booking)
-        .filter(Booking.user_openid == user_openid)
+        .filter(Booking.user_openid == current_openid)
         .order_by(Booking.created_at.desc())
         .all()
     )
@@ -175,13 +229,13 @@ async def list_user_bookings(user_openid: str = Query(..., min_length=1), db: Se
 @router.put("/bookings/{booking_id}/cancel")
 async def cancel_booking(
     booking_id: int,
-    user_openid: Optional[str] = Query(None),
     db: Session = Depends(get_db),
+    current_openid: str = Depends(get_current_client_user)
 ):
     booking = db.query(Booking).filter(Booking.id == booking_id).first()
     if not booking:
         raise HTTPException(status_code=404, detail="订单不存在")
-    if user_openid is not None and booking.user_openid != user_openid:
+    if booking.user_openid != current_openid:
         raise HTTPException(status_code=403, detail="无权限取消该订单")
     if booking.status == "cancelled":
         return {"message": "已取消"}
