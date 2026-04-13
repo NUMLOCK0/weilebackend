@@ -203,7 +203,7 @@ async def upload_file(file: UploadFile = File(...)):
             )
             
             # 生成访问链接 (云托管默认域名)
-            env_id = os.environ.get("WX_CLOUD_ENV", "prod-5gm2le1c2f0d8bb2")
+            
             public_url = f"https://{bucket}.tcb.qcloud.la.tcloudbaseapp.com/{key}"
             return {"url": public_url}
             
