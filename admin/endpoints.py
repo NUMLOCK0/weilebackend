@@ -173,7 +173,7 @@ def parse_authorization(auth_str: str):
 
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
-    """上传文件到微信云托管或本地并返回 URL"""
+    """上传文件到微信云托管对象存储 ( ap-shanghai )"""
     
     # 确保存储目录存在
     upload_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")
@@ -184,45 +184,50 @@ async def upload_file(file: UploadFile = File(...)):
     filename = f"{uuid.uuid4()}{ext}"
     file_path = os.path.join(upload_dir, filename)
     
-    # 始终先保存到本地作为备份
+    # 保存到本地作为备份
     await file.seek(0)
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    # 1. 获取微信云托管上传授权
+    # 微信云托管对象存储配置
+    bucket = "7072-prod-5gm2le1c2f0d8bb2-1420164044"
+    region = "ap-shanghai"
+    
+    # 尝试从环境变量获取 SecretId/SecretKey (云托管环境内置)
+    secret_id = os.environ.get('TENCENTCLOUD_SECRETID')
+    secret_key = os.environ.get('TENCENTCLOUD_SECRETKEY')
+    token = os.environ.get('TENCENTCLOUD_SESSIONTOKEN')
+
+    if secret_id and secret_key:
+        try:
+            config = CosConfig(Region=region, SecretId=secret_id, SecretKey=secret_key, Token=token)
+            client = CosS3Client(config)
+            
+            key = f"uploads/{datetime.now().strftime('%Y%m%d')}/{filename}"
+            
+            with open(file_path, 'rb') as f:
+                client.put_object(
+                    Bucket=bucket,
+                    Body=f,
+                    Key=key,
+                    EnableMD5=False
+                )
+            
+            # 生成访问链接 (云托管默认域名)
+            env_id = os.environ.get("WX_CLOUD_ENV", "prod-5gm2le1c2f0d8bb2")
+            public_url = f"https://{env_id}.tcloudbaseapp.com/{key}"
+            return {"url": public_url}
+            
+        except Exception as e:
+            print(f"Cloud Storage Upload Error: {str(e)}")
+
+    # 1. 获取微信云托管上传授权 (旧逻辑适配)
     auth_params = await get_wx_upload_params(filename)
     if auth_params:
-        # 2. 将本地文件上传到微信 COS
-        # 因为 /tcb/uploadfile 返回的是组装好的 URL 和 authorization 字符串，
-        # 直接使用 requests/httpx 是最符合该接口设计的方式 (如上一版实现)。
-        # 如果必须使用 cos-python-sdk-v5，需要从 authorization 提取或者直接使用它的鉴权类
-        # 但鉴于云托管返回的 token 格式，我们采用 SDK 的 HTTP 客户端直接发请求（其实等价于自己发）
-        # 这里演示如何用 SDK 方式兼容：
-        
         try:
-            # 提取 bucket 和 region
-            # auth_params["url"] 格式: https://{bucket}.cos.{region}.myqcloud.com
-            from urllib.parse import urlparse
-            parsed_url = urlparse(auth_params["url"])
-            host_parts = parsed_url.netloc.split('.')
-            bucket = host_parts[0]
-            region = host_parts[2]
-            
-            # 使用临时密钥配置 COS
-            # 注意：这里的鉴权方式可能需要特殊处理，因为返回的是 authorization 签名而不是完整的 secret_key
-            # 所以为了最稳妥，我们使用 httpx 发送 PUT 请求（与 COS SDK 底层逻辑一致）
-            
             with open(file_path, "rb") as f:
                 file_content = f.read()
-                
-            headers = {
-                "Authorization": auth_params["authorization"],
-                "x-cos-security-token": auth_params["token"],
-                "x-cos-meta-fileid": auth_params["cos_file_id"],
-                "Content-Type": file.content_type
-            }
             
-            # COS 上传通常是 PUT 或者是 multipart POST。微信云托管文档中通常是 multipart POST
             files = {
                 "key": (None, auth_params["path"]),
                 "Signature": (None, auth_params["authorization"]),
@@ -233,18 +238,15 @@ async def upload_file(file: UploadFile = File(...)):
             
             async with httpx.AsyncClient() as client:
                 res = await client.post(auth_params["url"], files=files, timeout=30.0)
-                if res.status_code == 204: # COS multipart 上传成功通常返回 204
+                if res.status_code == 204:
                     env_id = auth_params["env"]
                     path = auth_params["path"]
                     public_url = f"https://{env_id}.tcloudbaseapp.com/{path}"
                     return {"url": public_url}
-                else:
-                    print(f"COS Upload Error: {res.status_code} - {res.text}")
-                    
         except Exception as e:
-            print(f"COS SDK Upload Exception: {str(e)}")
+            print(f"Fallback Upload Exception: {str(e)}")
 
-    # --- 兜底方案：如果云上传失败或未配置，退回到本地存储 URL ---
+    # --- 兜底方案：退回到本地存储 URL ---
     return {"url": f"/uploads/{filename}"}
 
 # --- 服务管理 (CRUD) ---
