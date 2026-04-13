@@ -173,27 +173,19 @@ def parse_authorization(auth_str: str):
 
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
-    """上传文件到微信云托管对象存储 ( ap-shanghai )"""
+    """直接上传文件到微信云托管对象存储，不保留本地副本"""
     
-    # 确保存储目录存在
-    upload_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")
-    if not os.path.exists(upload_dir):
-        os.makedirs(upload_dir)
-        
     ext = os.path.splitext(file.filename)[1]
     filename = f"{uuid.uuid4()}{ext}"
-    file_path = os.path.join(upload_dir, filename)
     
-    # 保存到本地作为备份
-    await file.seek(0)
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    # 读取文件内容为二进制流
+    content = await file.read()
 
     # 微信云托管对象存储配置
     bucket = "7072-prod-5gm2le1c2f0d8bb2-1420164044"
     region = "ap-shanghai"
     
-    # 尝试从环境变量获取 SecretId/SecretKey (云托管环境内置)
+    # 优先使用 SDK 直接上传 (利用云托管免密钥环境)
     secret_id = os.environ.get('TENCENTCLOUD_SECRETID')
     secret_key = os.environ.get('TENCENTCLOUD_SECRETKEY')
     token = os.environ.get('TENCENTCLOUD_SESSIONTOKEN')
@@ -205,13 +197,12 @@ async def upload_file(file: UploadFile = File(...)):
             
             key = f"uploads/{datetime.now().strftime('%Y%m%d')}/{filename}"
             
-            with open(file_path, 'rb') as f:
-                client.put_object(
-                    Bucket=bucket,
-                    Body=f,
-                    Key=key,
-                    EnableMD5=False
-                )
+            client.put_object(
+                Bucket=bucket,
+                Body=content,
+                Key=key,
+                EnableMD5=False
+            )
             
             # 生成访问链接 (云托管默认域名)
             env_id = os.environ.get("WX_CLOUD_ENV", "prod-5gm2le1c2f0d8bb2")
@@ -219,21 +210,18 @@ async def upload_file(file: UploadFile = File(...)):
             return {"url": public_url}
             
         except Exception as e:
-            print(f"Cloud Storage Upload Error: {str(e)}")
+            print(f"Cloud Storage SDK Upload Error: {str(e)}")
 
-    # 1. 获取微信云托管上传授权 (旧逻辑适配)
+    # 兜底：使用微信云托管上传授权接口 (适用于本地调试且未配置环境变量时)
     auth_params = await get_wx_upload_params(filename)
     if auth_params:
         try:
-            with open(file_path, "rb") as f:
-                file_content = f.read()
-            
             files = {
                 "key": (None, auth_params["path"]),
                 "Signature": (None, auth_params["authorization"]),
                 "x-cos-security-token": (None, auth_params["token"]),
                 "x-cos-meta-fileid": (None, auth_params["cos_file_id"]),
-                "file": (filename, file_content, file.content_type)
+                "file": (filename, content, file.content_type)
             }
             
             async with httpx.AsyncClient() as client:
@@ -246,8 +234,7 @@ async def upload_file(file: UploadFile = File(...)):
         except Exception as e:
             print(f"Fallback Upload Exception: {str(e)}")
 
-    # --- 兜底方案：退回到本地存储 URL ---
-    return {"url": f"/uploads/{filename}"}
+    raise HTTPException(status_code=500, detail="文件上传失败，请检查微信云托管配置")
 
 # --- 服务管理 (CRUD) ---
 
