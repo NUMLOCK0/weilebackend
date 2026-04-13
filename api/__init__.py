@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List, Optional
 from datetime import date as date_type
-import urllib.request
+import httpx
 import json
 import os
 
@@ -45,12 +45,16 @@ async def client_login(
         if app_id and app_secret:
             url = f"https://api.weixin.qq.com/sns/jscode2session?appid={app_id}&secret={app_secret}&js_code={req.code}&grant_type=authorization_code"
             try:
-                with urllib.request.urlopen(url) as response:
-                    data = json.loads(response.read().decode())
-                    if "openid" in data:
-                        openid = data["openid"]
+                async with httpx.AsyncClient(verify=False) as client:
+                    response = await client.get(url, timeout=10.0)
+                    if response.status_code == 200:
+                        data = response.json()
+                        if "openid" in data:
+                            openid = data["openid"]
+                        else:
+                            raise HTTPException(status_code=400, detail=f"微信登录失败: {data.get('errmsg')}")
                     else:
-                        raise HTTPException(status_code=400, detail=f"微信登录失败: {data.get('errmsg')}")
+                        raise HTTPException(status_code=500, detail=f"请求微信接口 HTTP 错误: {response.status_code}")
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"请求微信接口失败: {str(e)}")
         else:

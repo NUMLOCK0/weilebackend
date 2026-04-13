@@ -94,7 +94,7 @@ async def get_wechat_access_token():
         return None
         
     url = f"https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={app_id}&secret={app_secret}"
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(verify=False) as client:
         try:
             response = await client.get(url, timeout=10.0)
             if response.status_code == 200:
@@ -132,11 +132,9 @@ async def get_wx_upload_params(filename: str):
         "env": env_id,
         "path": path
     }
-    print(url, 'url')
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(verify=False) as client:
         try:
             response = await client.post(url, json=payload, timeout=10.0)
-            print(response, 'response')
             if response.status_code == 200:
                 data = response.json()
                 if data.get("errcode") == 0:
@@ -224,7 +222,7 @@ async def upload_file(file: UploadFile = File(...)):
                 "file": (filename, content, file.content_type)
             }
             
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=False) as client:
                 res = await client.post(auth_params["url"], files=files, timeout=30.0)
                 if res.status_code == 204:
                     env_id = auth_params["env"]
