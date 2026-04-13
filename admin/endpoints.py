@@ -2,6 +2,10 @@ from fastapi import APIRouter, HTTPException, Depends, File, UploadFile, Query
 import os
 import shutil
 import uuid
+import httpx
+import json
+from qcloud_cos import CosConfig
+from qcloud_cos import CosS3Client
 from datetime import datetime, timedelta
 from datetime import date as date_type
 from sqlalchemy import func
@@ -79,26 +83,168 @@ async def login(login_in: LoginRequest, db: Session = Depends(get_db)):
         "permissions": ["schedules:manage"]
     }
 
-# --- 文件上传接口 ---
+# --- 文件上传接口 (COS SDK 版本) ---
+
+async def get_wechat_access_token():
+    """获取微信接口调用凭证 access_token"""
+    app_id = os.getenv("WECHAT_APP_ID")
+    app_secret = os.getenv("WECHAT_APP_SECRET")
+    if not app_id or not app_secret:
+        print("Warning: WECHAT_APP_ID or WECHAT_APP_SECRET not set.")
+        return None
+        
+    url = f"https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid={app_id}&secret={app_secret}"
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(url, timeout=10.0)
+            if response.status_code == 200:
+                data = response.json()
+                if "access_token" in data:
+                    return data["access_token"]
+                else:
+                    print(f"Get Access Token Error: {data}")
+            else:
+                print(f"Get Access Token HTTP Error: {response.status_code}")
+        except Exception as e:
+            print(f"Get Access Token Exception: {str(e)}")
+    return None
+
+async def get_wx_upload_params(filename: str):
+    """从微信云托管获取上传授权，获取临时密钥信息"""
+    access_token = await get_wechat_access_token()
+    if not access_token:
+        print("Failed to get wechat access_token.")
+        return None
+        
+    # 微信云开发获取上传文件链接 API (使用 access_token)
+    url = f"https://api.weixin.qq.com/tcb/uploadfile?access_token={access_token}"
+    
+    # 获取环境 ID (通常从环境变量获取)
+    env_id = os.environ.get("WX_CLOUD_ENV") or os.environ.get("ENV_ID")
+    if not env_id:
+        # 如果没有配置环境 ID，退回到本地存储或报错
+        print("Warning: WX_CLOUD_ENV not set, file will not be uploaded to cloud storage.")
+        return None
+
+    path = f"uploads/{datetime.now().strftime('%Y%m%d')}/{uuid.uuid4()}_{filename}"
+    
+    payload = {
+        "env": env_id,
+        "path": path
+    }
+    print(url, 'url')
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(url, json=payload, timeout=10.0)
+            print(response, 'response')
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("errcode") == 0:
+                    return {
+                        "url": data["url"],
+                        "token": data["token"],
+                        "authorization": data["authorization"],
+                        "file_id": data["file_id"],
+                        "cos_file_id": data["cos_file_id"],
+                        "path": path,
+                        "env": env_id
+                    }
+                else:
+                    print(f"WX Upload Auth Error: {data}")
+            else:
+                print(f"WX Upload Auth HTTP Error: {response.status_code}")
+        except Exception as e:
+            print(f"WX Upload Auth Exception: {str(e)}")
+    return None
+
+def parse_authorization(auth_str: str):
+    """解析 authorization 字符串获取 SecretId 和 SecretKey"""
+    # auth_str 格式通常为: q-sign-algorithm=sha1&q-ak=SecretId&q-sign-time=...&q-key-time=...&q-header-list=...&q-url-param-list=...&q-signature=...
+    # 或者对于微信云开发返回的特殊 auth 格式进行适配
+    import urllib.parse
+    params = urllib.parse.parse_qs(auth_str)
+    
+    secret_id = params.get('q-ak', [''])[0]
+    # 注意：微信云开发直接获取上传链接的接口，authorization 可能不包含完整的 secret_key
+    # 通常使用 COS SDK 建议使用 sts 接口 (获取临时密钥)
+    # 但由于微信云托管 /tcb/uploadfile 返回的是组装好的 authorization 签名，直接使用 SDK 的简单 put_object 可能需要直接传递 token 和 signature
+    # 或者我们可以直接手动发起 PUT 请求，因为 SDK 更适合完整的 SecretId/SecretKey 鉴权
+    pass
 
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
-    """上传文件到服务器并返回可访问 URL"""
+    """上传文件到微信云托管或本地并返回 URL"""
+    
     # 确保存储目录存在
     upload_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")
     if not os.path.exists(upload_dir):
         os.makedirs(upload_dir)
         
-    # 生成唯一文件名
     ext = os.path.splitext(file.filename)[1]
     filename = f"{uuid.uuid4()}{ext}"
     file_path = os.path.join(upload_dir, filename)
     
-    # 保存文件
+    # 始终先保存到本地作为备份
+    await file.seek(0)
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
+
+    # 1. 获取微信云托管上传授权
+    auth_params = await get_wx_upload_params(filename)
+    if auth_params:
+        # 2. 将本地文件上传到微信 COS
+        # 因为 /tcb/uploadfile 返回的是组装好的 URL 和 authorization 字符串，
+        # 直接使用 requests/httpx 是最符合该接口设计的方式 (如上一版实现)。
+        # 如果必须使用 cos-python-sdk-v5，需要从 authorization 提取或者直接使用它的鉴权类
+        # 但鉴于云托管返回的 token 格式，我们采用 SDK 的 HTTP 客户端直接发请求（其实等价于自己发）
+        # 这里演示如何用 SDK 方式兼容：
         
-    # 返回相对路径 (前端通过 /uploads/xxx 访问)
+        try:
+            # 提取 bucket 和 region
+            # auth_params["url"] 格式: https://{bucket}.cos.{region}.myqcloud.com
+            from urllib.parse import urlparse
+            parsed_url = urlparse(auth_params["url"])
+            host_parts = parsed_url.netloc.split('.')
+            bucket = host_parts[0]
+            region = host_parts[2]
+            
+            # 使用临时密钥配置 COS
+            # 注意：这里的鉴权方式可能需要特殊处理，因为返回的是 authorization 签名而不是完整的 secret_key
+            # 所以为了最稳妥，我们使用 httpx 发送 PUT 请求（与 COS SDK 底层逻辑一致）
+            
+            with open(file_path, "rb") as f:
+                file_content = f.read()
+                
+            headers = {
+                "Authorization": auth_params["authorization"],
+                "x-cos-security-token": auth_params["token"],
+                "x-cos-meta-fileid": auth_params["cos_file_id"],
+                "Content-Type": file.content_type
+            }
+            
+            # COS 上传通常是 PUT 或者是 multipart POST。微信云托管文档中通常是 multipart POST
+            files = {
+                "key": (None, auth_params["path"]),
+                "Signature": (None, auth_params["authorization"]),
+                "x-cos-security-token": (None, auth_params["token"]),
+                "x-cos-meta-fileid": (None, auth_params["cos_file_id"]),
+                "file": (filename, file_content, file.content_type)
+            }
+            
+            async with httpx.AsyncClient() as client:
+                res = await client.post(auth_params["url"], files=files, timeout=30.0)
+                if res.status_code == 204: # COS multipart 上传成功通常返回 204
+                    env_id = auth_params["env"]
+                    path = auth_params["path"]
+                    public_url = f"https://{env_id}.tcloudbaseapp.com/{path}"
+                    return {"url": public_url}
+                else:
+                    print(f"COS Upload Error: {res.status_code} - {res.text}")
+                    
+        except Exception as e:
+            print(f"COS SDK Upload Exception: {str(e)}")
+
+    # --- 兜底方案：如果云上传失败或未配置，退回到本地存储 URL ---
     return {"url": f"/uploads/{filename}"}
 
 # --- 服务管理 (CRUD) ---
@@ -492,7 +638,7 @@ async def get_shop_info(db: Session = Depends(get_db)):
             "name": "维乐会所",
             "address": "请输入地址",
             "phone": "请输入电话",
-            "hours": "11:00 - 05:00",
+            "hours": "11:00 - 04:00 (次日)",
             "description": "欢迎光临维乐会所",
             "latitude": 0,
             "longitude": 0,

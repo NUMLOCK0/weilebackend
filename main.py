@@ -1,6 +1,11 @@
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 import os
+from dotenv import load_dotenv
+
+# 加载 .env 环境变量
+load_dotenv()
+
 from admin import router as admin_router
 from api import router as client_api_router
 from database import engine
