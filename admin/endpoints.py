@@ -202,9 +202,8 @@ async def upload_file(file: UploadFile = File(...)):
                 EnableMD5=False
             )
             
-            # 生成访问链接 (云托管默认域名)
-            
-            public_url = f"https://{bucket}.tcb.qcloud.la.tcloudbaseapp.com/{key}"
+            # 生成访问链接 (使用用户要求的 bucket 作为前缀)
+            public_url = f"https://{bucket}.tcb.qcloud.la/{key}"
             return {"url": public_url}
             
         except Exception as e:
@@ -225,9 +224,9 @@ async def upload_file(file: UploadFile = File(...)):
             async with httpx.AsyncClient(verify=False) as client:
                 res = await client.post(auth_params["url"], files=files, timeout=30.0)
                 if res.status_code == 204:
-                    env_id = auth_params["env"]
                     path = auth_params["path"]
-                    public_url = f"https://{env_id}.tcloudbaseapp.com/{path}"
+                    # 🌟 统一使用 bucket 作为前缀的域名
+                    public_url = f"https://{bucket}.tcb.qcloud.la/{path}"
                     return {"url": public_url}
         except Exception as e:
             print(f"Fallback Upload Exception: {str(e)}")
