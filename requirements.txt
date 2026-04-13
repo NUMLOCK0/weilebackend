@@ -10,3 +10,4 @@ python-multipart
 httpx
 python-dotenv
 cos-python-sdk-v5
+captcha
