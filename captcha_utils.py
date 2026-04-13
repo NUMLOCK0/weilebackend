@@ -29,24 +29,26 @@ def generate_captcha(length=4, width=160, height=60):
 
     # 绘制文字
     # 尝试加载内置或系统字体，如果失败则使用默认字体
+    font_size = 48  # 加大字体
     try:
         # Mac 常用字体路径示例，或者你可以指定具体的 ttf 文件
-        font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 40)
+        font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", font_size)
     except:
         try:
             # 兼容其他系统
-            font = ImageFont.truetype("arial.ttf", 40)
+            font = ImageFont.truetype("arial.ttf", font_size)
         except:
             font = ImageFont.load_default()
 
     for i, char in enumerate(code):
         # 随机旋转文字ImageFilter3
-        char_img = Image.new('RGBA', (40, 40), (255, 255, 255, 0))
+        char_img = Image.new('RGBA', (50, 50), (255, 255, 255, 0))
         char_draw = ImageDraw.Draw(char_img)
-        char_draw.text((0, 0), char, font=font, fill=(random.randint(0, 150), 0, 0))
-        rotated_char = char_img.rotate(random.randint(-30, 30), expand=1)
-        # 粘贴到主图
-        img.paste(rotated_char, (15 + i * 35, 10), rotated_char)
+        # 将文字颜色稍微加深，提高辨识度
+        char_draw.text((5, 0), char, font=font, fill=(random.randint(0, 100), 0, random.randint(0, 100)))
+        rotated_char = char_img.rotate(random.randint(-20, 20), expand=1)
+        # 粘贴到主图，调整位置确保不重叠且在视野中心
+        img.paste(rotated_char, (10 + i * 35, 5), rotated_char)
 
     # 模糊处理
     img = img.filter(ImageFilter.SMOOTH)
