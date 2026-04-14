@@ -5,7 +5,7 @@ import os
 
 # 数据库连接配置 (根据您的 MySQL 实际情况修改)
 # 格式: mysql+pymysql://用户名:密码@主机名:端口号/数据库名
-DEFAULT_DATABASE_URL = "mysql+pymysql://massage_booking_db:sbcTbcNrz3jbk7at@101.33.245.226:3306/massage_booking_db"
+DEFAULT_DATABASE_URL = "mysql+pymysql://weile:weileA12345dfbshdn@10.44.110.120:3306/massage_booking_db"
 SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL)
 
 engine = create_engine(
