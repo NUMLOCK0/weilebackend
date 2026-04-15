@@ -119,10 +119,11 @@ class ShopInfo(Base):
 
 class TechnicianSchedule(Base):
     __tablename__ = "technician_schedules"
-    __table_args__ = (UniqueConstraint("technician_id", "schedule_date", name="uq_technician_date"),)
+    __table_args__ = (UniqueConstraint("technician_id", "service_id", "schedule_date", name="uq_technician_service_date"),)
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     technician_id = Column(Integer, ForeignKey("technicians.id", ondelete="CASCADE"), nullable=False, index=True)
+    service_id = Column(Integer, ForeignKey("services.id", ondelete="CASCADE"), nullable=False, index=True)
     schedule_date = Column(Date, nullable=False, index=True)
     available_times = Column(JSON, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())

@@ -16,7 +16,7 @@ password_hash = PasswordHash((BcryptHasher(),))
 # JWT 配置 (从环境变量读取，提供默认值仅供本地测试)
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "34324324324asdsasdsaadasd")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 # 24小时
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", 60 * 24 * 7)) # 默认 7 天
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """验证密码"""
@@ -34,7 +34,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     if expires_delta:
         expire = datetime.now(timezone.utc) + expires_delta
     else:
-        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
+        expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)

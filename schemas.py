@@ -113,6 +113,7 @@ class BookingEditUpdate(BaseModel):
 
 class TechnicianScheduleUpsert(BaseModel):
     technician_id: int
+    service_id: int
     schedule_date: date
     available_times: List[str] = Field(default_factory=list)
 
@@ -120,8 +121,10 @@ class TechnicianScheduleUpsert(BaseModel):
 class TechnicianScheduleResponse(BaseModel):
     id: int
     technician_id: int
+    service_id: int
     schedule_date: date
     available_times: List[str]
+    occupied_times: List[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -131,6 +134,7 @@ class TechnicianScheduleResponse(BaseModel):
 
 class AvailabilityResponse(BaseModel):
     technician_id: int
+    service_id: int
     schedule_date: date
     available_times: List[str]
     booked_times: List[str]

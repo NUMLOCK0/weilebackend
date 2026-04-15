@@ -102,6 +102,7 @@ async def get_technicians(service_id: Optional[int] = None, db: Session = Depend
 @router.get("/availability", response_model=AvailabilityResponse)
 async def get_availability(
     technician_id: int = Query(..., ge=1),
+    service_id: int = Query(..., ge=1),
     schedule_date: date_type = Query(...),
     db: Session = Depends(get_db),
 ):
@@ -109,6 +110,7 @@ async def get_availability(
         db.query(TechnicianSchedule)
         .filter(
             TechnicianSchedule.technician_id == technician_id,
+            TechnicianSchedule.service_id == service_id,
             TechnicianSchedule.schedule_date == schedule_date,
         )
         .first()
@@ -133,6 +135,7 @@ async def get_availability(
 
     return {
         "technician_id": technician_id,
+        "service_id": service_id,
         "schedule_date": schedule_date,
         "available_times": available_times,
         "booked_times": booked_times,
@@ -165,6 +168,7 @@ async def create_booking(
             db.query(TechnicianSchedule)
             .filter(
                 TechnicianSchedule.technician_id == payload.technician_id,
+                TechnicianSchedule.service_id == payload.service_id,
                 TechnicianSchedule.schedule_date == payload.booking_date,
             )
             .first()

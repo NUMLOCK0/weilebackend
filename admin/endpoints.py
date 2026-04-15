@@ -290,7 +290,7 @@ async def delete_service(service_id: int, db: Session = Depends(get_db)):
 @router.get("/technicians", response_model=List[TechnicianResponse])
 async def get_technicians(db: Session = Depends(get_db)):
     """获取所有技师列表"""
-    return db.query(Technician).all()
+    return db.query(Technician).order_by(Technician.id.desc()).all()
 
 @router.get("/technicians/{tech_id}", response_model=TechnicianResponse)
 async def get_technician(tech_id: int, db: Session = Depends(get_db)):
@@ -356,6 +356,7 @@ async def delete_technician(tech_id: int, db: Session = Depends(get_db)):
 @router.get("/schedules", response_model=List[TechnicianScheduleResponse])
 async def list_schedules(
     technician_id: Optional[int] = None,
+    service_id: Optional[int] = None,
     start_date: Optional[date_type] = None,
     end_date: Optional[date_type] = None,
     db: Session = Depends(get_db),
@@ -363,6 +364,8 @@ async def list_schedules(
     query = db.query(TechnicianSchedule)
     if technician_id is not None:
         query = query.filter(TechnicianSchedule.technician_id == technician_id)
+    if service_id is not None:
+        query = query.filter(TechnicianSchedule.service_id == service_id)
     if start_date is not None:
         query = query.filter(TechnicianSchedule.schedule_date >= start_date)
     if end_date is not None:
@@ -370,30 +373,65 @@ async def list_schedules(
     return query.order_by(TechnicianSchedule.schedule_date.desc(), TechnicianSchedule.id.desc()).all()
 
 
-@router.get("/schedules/{technician_id}/{schedule_date}", response_model=TechnicianScheduleResponse)
+@router.get("/schedules/{technician_id}/{service_id}/{schedule_date}", response_model=TechnicianScheduleResponse)
 async def get_schedule(
     technician_id: int,
+    service_id: int,
     schedule_date: date_type,
     db: Session = Depends(get_db),
 ):
+    # Fetch schedule for this specific service
     schedule = (
         db.query(TechnicianSchedule)
         .filter(
             TechnicianSchedule.technician_id == technician_id,
+            TechnicianSchedule.service_id == service_id,
             TechnicianSchedule.schedule_date == schedule_date,
         )
         .first()
     )
+    
+    # Fetch occupied times from other services for the same technician and date
+    other_schedules = (
+        db.query(TechnicianSchedule)
+        .filter(
+            TechnicianSchedule.technician_id == technician_id,
+            TechnicianSchedule.service_id != service_id,
+            TechnicianSchedule.schedule_date == schedule_date,
+        )
+        .all()
+    )
+    occupied_times = []
+    for s in other_schedules:
+        if isinstance(s.available_times, list):
+            occupied_times.extend(s.available_times)
+    occupied_times = list(set(occupied_times))
+    occupied_times.sort()
+
     if not schedule:
         return {
             "id": 0,
             "technician_id": technician_id,
+            "service_id": service_id,
             "schedule_date": schedule_date,
             "available_times": [],
+            "occupied_times": occupied_times,
             "created_at": datetime.utcnow(),
             "updated_at": None,
         }
-    return schedule
+    
+    # Use Pydantic/dict to add occupied_times since it's not a model field
+    res = {
+        "id": schedule.id,
+        "technician_id": schedule.technician_id,
+        "service_id": schedule.service_id,
+        "schedule_date": schedule.schedule_date,
+        "available_times": schedule.available_times,
+        "occupied_times": occupied_times,
+        "created_at": schedule.created_at,
+        "updated_at": schedule.updated_at,
+    }
+    return res
 
 
 @router.post("/schedules", response_model=TechnicianScheduleResponse)
@@ -423,6 +461,7 @@ async def upsert_schedule(payload: TechnicianScheduleUpsert, db: Session = Depen
         db.query(TechnicianSchedule)
         .filter(
             TechnicianSchedule.technician_id == payload.technician_id,
+            TechnicianSchedule.service_id == payload.service_id,
             TechnicianSchedule.schedule_date == payload.schedule_date,
         )
         .first()
@@ -432,6 +471,7 @@ async def upsert_schedule(payload: TechnicianScheduleUpsert, db: Session = Depen
     else:
         schedule = TechnicianSchedule(
             technician_id=payload.technician_id,
+            service_id=payload.service_id,
             schedule_date=payload.schedule_date,
             available_times=cleaned_times,
         )
@@ -490,6 +530,7 @@ async def batch_upsert_schedules(
             db.query(TechnicianSchedule)
             .filter(
                 TechnicianSchedule.technician_id == payload.technician_id,
+                TechnicianSchedule.service_id == payload.service_id,
                 TechnicianSchedule.schedule_date == d,
             )
             .first()
@@ -500,6 +541,7 @@ async def batch_upsert_schedules(
         else:
             schedule = TechnicianSchedule(
                 technician_id=payload.technician_id,
+                service_id=payload.service_id,
                 schedule_date=d,
                 available_times=cleaned_times,
             )
