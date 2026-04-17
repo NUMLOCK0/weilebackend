@@ -91,6 +91,9 @@ class BookingResponse(BaseModel):
     service_id: int
     technician_id: int
     marketing_source_id: Optional[int] = None
+    service_name: Optional[str] = None      # 🌟 后端 Join 返回
+    technician_name: Optional[str] = None   # 🌟 后端 Join 返回
+    marketing_source_name: Optional[str] = None # 🌟 后端 Join 返回
     booking_date: date
     booking_times: List[str]  # 🌟 FastAPI 会自动把后端的 JSON 转换成 List 返回给前端
     total_price: Decimal

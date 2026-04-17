@@ -738,7 +738,15 @@ async def get_bookings(
     db: Session = Depends(get_db)
 ):
     """获取预约单记录 (带分页)"""
-    query = db.query(Booking)
+    # 🌟 使用 outerjoin 关联查询服务、技师和营销渠道的名称
+    query = db.query(
+        Booking,
+        Service.name.label("service_name"),
+        Technician.name.label("technician_name"),
+        MarketingSource.name.label("marketing_source_name")
+    ).outerjoin(Service, Booking.service_id == Service.id) \
+     .outerjoin(Technician, Booking.technician_id == Technician.id) \
+     .outerjoin(MarketingSource, Booking.marketing_source_id == MarketingSource.id)
     
     if status:
         query = query.filter(Booking.status == status)
@@ -756,14 +764,24 @@ async def get_bookings(
     offset = (page - 1) * size
     
     # 3. 排序，并切片获取当前页的数据
-    bookings = query.order_by(Booking.created_at.desc()).offset(offset).limit(size).all()
+    results = query.order_by(Booking.created_at.desc()).offset(offset).limit(size).all()
+    
+    # 🌟 组装数据，将名称字段注入到 Booking 响应中
+    bookings_data = []
+    for booking, s_name, t_name, m_name in results:
+        # 将 SQLAlchemy 对象转换为字典，并补充名称字段
+        b_dict = {column.name: getattr(booking, column.name) for column in booking.__table__.columns}
+        b_dict["service_name"] = s_name
+        b_dict["technician_name"] = t_name
+        b_dict["marketing_source_name"] = m_name
+        bookings_data.append(b_dict)
     
     # 返回符合 PageResponse 结构的数据
     return {
         "total": total,
         "page": page,
         "size": size,
-        "data": bookings
+        "data": bookings_data
     }
 
  
