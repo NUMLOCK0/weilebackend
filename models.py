@@ -14,10 +14,11 @@ class Service(Base):
     image_url = Column(String(255))
     is_hot = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
+    sort_order = Column(Integer, default=0)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     # 关联技师 (多对多)
-    technicians = relationship("Technician", secondary="technician_services", back_populates="services")
+    technicians = relationship("Technician", secondary="technician_services", back_populates="services", order_by="desc(Technician.sort_order), desc(Technician.id)")
 
 class Technician(Base):
     __tablename__ = "technicians"
@@ -29,10 +30,11 @@ class Technician(Base):
     rating = Column(DECIMAL(2, 1), default=5.0)
     color = Column(String(10))
     is_active = Column(Boolean, default=True)
+    sort_order = Column(Integer, default=0)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     # 关联服务 (多对多)
-    services = relationship("Service", secondary="technician_services", back_populates="technicians")
+    services = relationship("Service", secondary="technician_services", back_populates="technicians", order_by="desc(Service.sort_order), desc(Service.id)")
 
 class TechnicianService(Base):
     __tablename__ = "technician_services"

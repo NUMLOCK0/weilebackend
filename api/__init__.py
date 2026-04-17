@@ -73,12 +73,12 @@ async def client_login(
 
 @router.get("/services", response_model=List[ServiceResponse])
 async def get_services(db: Session = Depends(get_db)):
-    return db.query(Service).filter(Service.is_active == True).all()
+    return db.query(Service).filter(Service.is_active == True).order_by(Service.sort_order.desc(), Service.id.desc()).all()
 
 
 @router.get("/carousels", response_model=List[CarouselResponse])
 async def get_carousels(db: Session = Depends(get_db)):
-    return db.query(Carousel).filter(Carousel.is_active == True).order_by(Carousel.sort_order.asc()).all()
+    return db.query(Carousel).filter(Carousel.is_active == True).order_by(Carousel.sort_order.desc(), Carousel.id.desc()).all()
 
 
 @router.get("/shop-info", response_model=Optional[ShopInfoResponse])
@@ -92,11 +92,26 @@ async def get_marketing_sources(db: Session = Depends(get_db)):
 
 
 @router.get("/technicians", response_model=List[TechnicianResponse])
-async def get_technicians(service_id: Optional[int] = None, db: Session = Depends(get_db)):
+async def get_technicians(
+    service_id: Optional[int] = None, 
+    schedule_date: Optional[date_type] = None,
+    db: Session = Depends(get_db)
+):
     query = db.query(Technician).filter(Technician.is_active == True)
+    
     if service_id is not None:
         query = query.filter(Technician.services.any(Service.id == service_id))
-    return query.all()
+    
+    if schedule_date is not None:
+        # 🌟 优化：只返回在该日期有排班的技师
+        query = query.filter(
+            Technician.id.in_(
+                db.query(TechnicianSchedule.technician_id)
+                .filter(TechnicianSchedule.schedule_date == schedule_date)
+            )
+        )
+        
+    return query.order_by(Technician.sort_order.desc(), Technician.id.desc()).all()
 
 
 @router.get("/availability", response_model=AvailabilityResponse)
@@ -106,6 +121,9 @@ async def get_availability(
     schedule_date: date_type = Query(...),
     db: Session = Depends(get_db),
 ):
+    # 🌟 优化：查找该技师在该日期的排班
+    # 按照新逻辑“每个项目都可以排班所有时间”，我们尝试获取该技师当天的排班计划
+    # 如果有针对特定项目的排班则优先，否则获取该技师当天的任意排班
     schedule = (
         db.query(TechnicianSchedule)
         .filter(
@@ -115,6 +133,19 @@ async def get_availability(
         )
         .first()
     )
+    
+    if not schedule:
+        # 尝试获取该技师当天的任意一个排班（代表其出勤时段）
+        schedule = (
+            db.query(TechnicianSchedule)
+            .filter(
+                TechnicianSchedule.technician_id == technician_id,
+                TechnicianSchedule.schedule_date == schedule_date,
+            )
+            .first()
+        )
+
+    # 获取该技师当天的所有预约（不分项目），用于计算冲突
     bookings = (
         db.query(Booking)
         .filter(
@@ -164,6 +195,7 @@ async def create_booking(
     requested_times = [t for t in requested_times if isinstance(t, str)]
 
     if requested_times:
+        # 🌟 优化：查找该技师在该日期的任意排班（通用时段）
         schedule = (
             db.query(TechnicianSchedule)
             .filter(
@@ -173,6 +205,16 @@ async def create_booking(
             )
             .first()
         )
+        if not schedule:
+            schedule = (
+                db.query(TechnicianSchedule)
+                .filter(
+                    TechnicianSchedule.technician_id == payload.technician_id,
+                    TechnicianSchedule.schedule_date == payload.booking_date,
+                )
+                .first()
+            )
+
         available_times = schedule.available_times if schedule and isinstance(schedule.available_times, list) else []
         available_times = {t for t in available_times if isinstance(t, str)}
         if not available_times:

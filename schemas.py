@@ -13,6 +13,7 @@ class ServiceBase(BaseModel):
     image_url: Optional[str] = None
     is_hot: bool = False
     is_active: bool = True
+    sort_order: int = 0
 
 class ServiceCreate(ServiceBase):
     pass
@@ -26,6 +27,7 @@ class ServiceUpdate(BaseModel):
     image_url: Optional[str] = None
     is_hot: Optional[bool] = None
     is_active: Optional[bool] = None
+    sort_order: Optional[int] = None
 
 class ServiceResponse(ServiceBase):
     id: int
@@ -42,6 +44,7 @@ class TechnicianBase(BaseModel):
     rating: Decimal = Field(5.0, ge=0, le=5.0)
     color: Optional[str] = None
     is_active: bool = True
+    sort_order: int = 0
 
 class TechnicianCreate(TechnicianBase):
     service_ids: List[int] = [] # 创建时关联的服务ID列表
@@ -53,6 +56,7 @@ class TechnicianUpdate(BaseModel):
     rating: Optional[Decimal] = None
     color: Optional[str] = None
     is_active: Optional[bool] = None
+    sort_order: Optional[int] = None
     service_ids: Optional[List[int]] = None
 
 class TechnicianResponse(TechnicianBase):

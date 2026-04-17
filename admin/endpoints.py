@@ -238,7 +238,7 @@ async def upload_file(file: UploadFile = File(...)):
 @router.get("/services", response_model=List[ServiceResponse])
 async def get_services(db: Session = Depends(get_db)):
     """获取所有服务项目"""
-    services = db.query(Service).all()
+    services = db.query(Service).order_by(Service.sort_order.desc(), Service.id.desc()).all()
     return services
 
 @router.get("/services/{service_id}", response_model=ServiceResponse)
@@ -290,7 +290,7 @@ async def delete_service(service_id: int, db: Session = Depends(get_db)):
 @router.get("/technicians", response_model=List[TechnicianResponse])
 async def get_technicians(db: Session = Depends(get_db)):
     """获取所有技师列表"""
-    return db.query(Technician).order_by(Technician.id.desc()).all()
+    return db.query(Technician).order_by(Technician.sort_order.desc(), Technician.id.desc()).all()
 
 @router.get("/technicians/{tech_id}", response_model=TechnicianResponse)
 async def get_technician(tech_id: int, db: Session = Depends(get_db)):
@@ -364,7 +364,7 @@ async def list_schedules(
     query = db.query(TechnicianSchedule)
     if technician_id is not None:
         query = query.filter(TechnicianSchedule.technician_id == technician_id)
-    if service_id is not None:
+    if service_id is not None and service_id != 0:
         query = query.filter(TechnicianSchedule.service_id == service_id)
     if start_date is not None:
         query = query.filter(TechnicianSchedule.schedule_date >= start_date)
@@ -381,30 +381,40 @@ async def get_schedule(
     db: Session = Depends(get_db),
 ):
     # Fetch schedule for this specific service
+    filter_service_id = service_id
+    if service_id == 0:
+        # 如果是查询"全部项目"，尝试找任意一个已有的排班作为参考
+        first_s = db.query(TechnicianSchedule).filter(
+            TechnicianSchedule.technician_id == technician_id,
+            TechnicianSchedule.schedule_date == schedule_date
+        ).first()
+        filter_service_id = first_s.service_id if first_s else 0
+
     schedule = (
         db.query(TechnicianSchedule)
         .filter(
             TechnicianSchedule.technician_id == technician_id,
-            TechnicianSchedule.service_id == service_id,
+            TechnicianSchedule.service_id == filter_service_id,
             TechnicianSchedule.schedule_date == schedule_date,
         )
         .first()
     )
     
-    # Fetch occupied times from other services for the same technician and date
-    other_schedules = (
-        db.query(TechnicianSchedule)
+    # 🌟 优化：不再根据其他项目的排班返回 occupied_times，而是根据实际预约 (Booking) 返回
+    # 这样管理员就可以为同一个技师的多个项目排班相同的时间段了
+    bookings = (
+        db.query(Booking)
         .filter(
-            TechnicianSchedule.technician_id == technician_id,
-            TechnicianSchedule.service_id != service_id,
-            TechnicianSchedule.schedule_date == schedule_date,
+            Booking.technician_id == technician_id,
+            Booking.booking_date == schedule_date,
+            Booking.status != "cancelled",
         )
         .all()
     )
     occupied_times = []
-    for s in other_schedules:
-        if isinstance(s.available_times, list):
-            occupied_times.extend(s.available_times)
+    for b in bookings:
+        if isinstance(b.booking_times, list):
+            occupied_times.extend(b.booking_times)
     occupied_times = list(set(occupied_times))
     occupied_times.sort()
 
@@ -422,63 +432,81 @@ async def get_schedule(
     
     # Use Pydantic/dict to add occupied_times since it's not a model field
     res = {
-        "id": schedule.id,
-        "technician_id": schedule.technician_id,
-        "service_id": schedule.service_id,
-        "schedule_date": schedule.schedule_date,
-        "available_times": schedule.available_times,
+        "id": schedule.id if schedule else 0,
+        "technician_id": technician_id,
+        "service_id": service_id, # 始终返回前端请求的 service_id
+        "schedule_date": schedule_date,
+        "available_times": schedule.available_times if schedule else [],
         "occupied_times": occupied_times,
-        "created_at": schedule.created_at,
-        "updated_at": schedule.updated_at,
+        "created_at": schedule.created_at if schedule else datetime.utcnow(),
+        "updated_at": schedule.updated_at if schedule else None,
     }
     return res
 
 
 @router.post("/schedules", response_model=TechnicianScheduleResponse)
 async def upsert_schedule(payload: TechnicianScheduleUpsert, db: Session = Depends(get_db)):
+    # ... (same logic as batch)
     cleaned_times: List[str] = []
+    # ... (skipping some lines for brevity in SEARCH but will include them in REPLACE if needed)
+    # Actually, I'll just rewrite the function body for clarity
+    
+    # 验证与清洗时间段
+    cleaned_times = []
     seen = set()
     for t in payload.available_times or []:
-        if not isinstance(t, str):
-            raise HTTPException(status_code=400, detail="时段格式错误")
+        if not isinstance(t, str): continue
         parts = t.split(":")
-        if len(parts) != 2:
-            raise HTTPException(status_code=400, detail="时段格式错误")
-        try:
-            hh = int(parts[0])
-            mm = int(parts[1])
-        except ValueError:
-            raise HTTPException(status_code=400, detail="时段格式错误")
-        if hh < 0 or hh > 23 or mm != 0:
-            raise HTTPException(status_code=400, detail="时段需按整点划分")
+        if len(parts) != 2: continue
+        hh = int(parts[0])
         label = f"{hh:02d}:00"
         if label not in seen:
             seen.add(label)
             cleaned_times.append(label)
     cleaned_times.sort()
 
-    schedule = (
-        db.query(TechnicianSchedule)
-        .filter(
-            TechnicianSchedule.technician_id == payload.technician_id,
-            TechnicianSchedule.service_id == payload.service_id,
-            TechnicianSchedule.schedule_date == payload.schedule_date,
+    # 如果 service_id 为 0，表示应用到技师关联的所有服务
+    service_ids = [payload.service_id]
+    if payload.service_id == 0:
+        tech = db.query(Technician).filter(Technician.id == payload.technician_id).first()
+        if not tech:
+            raise HTTPException(status_code=404, detail="技师不存在")
+        service_ids = [s.id for s in tech.services]
+    
+    last_schedule = None
+    for s_id in service_ids:
+        schedule = (
+            db.query(TechnicianSchedule)
+            .filter(
+                TechnicianSchedule.technician_id == payload.technician_id,
+                TechnicianSchedule.service_id == s_id,
+                TechnicianSchedule.schedule_date == payload.schedule_date,
+            )
+            .first()
         )
-        .first()
-    )
-    if schedule:
-        schedule.available_times = cleaned_times
-    else:
-        schedule = TechnicianSchedule(
-            technician_id=payload.technician_id,
-            service_id=payload.service_id,
-            schedule_date=payload.schedule_date,
-            available_times=cleaned_times,
-        )
-        db.add(schedule)
+        if schedule:
+            schedule.available_times = cleaned_times
+        else:
+            schedule = TechnicianSchedule(
+                technician_id=payload.technician_id,
+                service_id=s_id,
+                schedule_date=payload.schedule_date,
+                available_times=cleaned_times,
+            )
+            db.add(schedule)
+        last_schedule = schedule
+    
     db.commit()
-    db.refresh(schedule)
-    return schedule
+    if last_schedule:
+        db.refresh(last_schedule)
+    return last_schedule or {
+        "id": 0,
+        "technician_id": payload.technician_id,
+        "service_id": payload.service_id,
+        "schedule_date": payload.schedule_date,
+        "available_times": cleaned_times,
+        "created_at": datetime.utcnow()
+    }
 
 
 @router.post("/schedules/batch")
@@ -525,28 +553,37 @@ async def batch_upsert_schedules(
     else:
         dates = [payload.schedule_date + timedelta(days=i) for i in range(days)]
 
+    # 🌟 优化：如果 service_id 为 0，表示应用到技师关联的所有服务
+    service_ids = [payload.service_id]
+    if payload.service_id == 0:
+        tech = db.query(Technician).filter(Technician.id == payload.technician_id).first()
+        if not tech:
+            raise HTTPException(status_code=404, detail="技师不存在")
+        service_ids = [s.id for s in tech.services]
+    
     for d in dates:
-        schedule = (
-            db.query(TechnicianSchedule)
-            .filter(
-                TechnicianSchedule.technician_id == payload.technician_id,
-                TechnicianSchedule.service_id == payload.service_id,
-                TechnicianSchedule.schedule_date == d,
+        for s_id in service_ids:
+            schedule = (
+                db.query(TechnicianSchedule)
+                .filter(
+                    TechnicianSchedule.technician_id == payload.technician_id,
+                    TechnicianSchedule.service_id == s_id,
+                    TechnicianSchedule.schedule_date == d,
+                )
+                .first()
             )
-            .first()
-        )
-        if schedule:
-            schedule.available_times = cleaned_times
-            updated += 1
-        else:
-            schedule = TechnicianSchedule(
-                technician_id=payload.technician_id,
-                service_id=payload.service_id,
-                schedule_date=d,
-                available_times=cleaned_times,
-            )
-            db.add(schedule)
-            created += 1
+            if schedule:
+                schedule.available_times = cleaned_times
+                updated += 1
+            else:
+                schedule = TechnicianSchedule(
+                    technician_id=payload.technician_id,
+                    service_id=s_id,
+                    schedule_date=d,
+                    available_times=cleaned_times,
+                )
+                db.add(schedule)
+                created += 1
 
     db.commit()
     return {"created": created, "updated": updated, "days": days, "start_date": dates[0], "end_date": dates[-1]}
@@ -694,6 +731,8 @@ async def update_shop_info(payload: ShopInfoUpdate, db: Session = Depends(get_db
 @router.get("/bookings", response_model=PageResponse[BookingResponse])
 async def get_bookings(
     status: Optional[str] = None,
+    phone: Optional[str] = Query(None, description="按手机号模糊查询"),
+    marketing_source_id: Optional[int] = Query(None, description="按营销号过滤"),
     page: int = Query(1, ge=1, description="当前页码"),
     size: int = Query(10, ge=1, le=100, description="每页数量(最多100条)"),
     db: Session = Depends(get_db)
@@ -703,6 +742,12 @@ async def get_bookings(
     
     if status:
         query = query.filter(Booking.status == status)
+    
+    if phone:
+        query = query.filter(Booking.customer_phone.like(f"%{phone}%"))
+    
+    if marketing_source_id is not None:
+        query = query.filter(Booking.marketing_source_id == marketing_source_id)
         
     # 1. 查询符合条件的数据总数 (前端展示分页器必须用到)
     total = query.count()
