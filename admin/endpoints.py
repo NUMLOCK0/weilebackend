@@ -826,3 +826,15 @@ async def update_booking_details(
     db.refresh(db_booking)
     
     return db_booking
+
+
+@router.delete("/bookings/{booking_id}")
+async def delete_booking(booking_id: int, db: Session = Depends(get_db)):
+    """删除预约单"""
+    db_booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if not db_booking:
+        raise HTTPException(status_code=404, detail="订单不存在")
+    
+    db.delete(db_booking)
+    db.commit()
+    return {"message": f"预约单 {booking_id} 已成功删除"}
